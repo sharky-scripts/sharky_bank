@@ -14,13 +14,12 @@ client_scripts {
 }
 
 server_scripts {
+    '@oxmysql/lib/MySQL.lua',
     'server.lua'
 }
 
-ui_page 'ui/index.html'
+ui_page 'web/dist/index.html'
 
 files {
-    'ui/index.html',
-    'ui/style.css',
-    'ui/index.js',
+    'web/dist/**',
 }

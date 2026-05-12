@@ -1,126 +1,218 @@
-local banks = Config.Banks
+local Bank = {
+    getAccount = function(cb)
+        ESX.TriggerServerCallback("bank:getAccount", function(data)
+            local balance = 0
+            local history = {}
+            balance = tonumber(data.balance) or 0
+            history = data.history
+            cb({ balance = balance, history = history })
+        end)
+    end,
 
--- Event Handlers
-function onBalanceReceived(balance)
-    SendNUIMessage({
-        type = "openBank",
-        balance = balance,
-    })
-    SetNuiFocus(true, true)
-end
+    syncAccount = function(self)
+        self.getAccount(function(account)
+            SendNUIMessage({
+                type = "updateAccount",
+                currentBalance = account.balance,
+                history = account.history,
+            })
+        end)
+    end,
 
-function onDeposit(data, cb)
-    local amount = data.amount
-    ESX.TriggerServerCallback('mta_bank:deposit', function(response)
-        if response.success then
-            updateBalance(response.newBalance)
+    notify = function(message, typ)
+        ESX.ShowNotification(message, typ)
+    end,
+
+    deposit = function(self, amount)
+        ESX.TriggerServerCallback("bank:deposit", function(res)
+            if res.ok then
+                self:syncAccount()
+            elseif res.message then
+                self.notify(res.message, "error")
+            end
+        end, tonumber(amount))
+    end,
+
+    withdraw = function(self, amount)
+        ESX.TriggerServerCallback("bank:withdraw", function(res)
+            if res.ok then
+                self:syncAccount()
+            elseif res.message then
+                self.notify(res.message, "error")
+            end
+        end, tonumber(amount))
+    end,
+
+    transfer = function(self, amount, target)
+        ESX.TriggerServerCallback("bank:transfer", function(res)
+            if res.ok then
+                self:syncAccount()
+            elseif res.message then
+                self.notify(res.message, "error")
+            end
+        end, tonumber(amount), target)
+    end,
+
+    showBankUi = function(self, state)
+        SetNuiFocus(state, state)
+        if state then
+            self.getAccount(function(account)
+                SendNUIMessage({
+                    type = "openBank",
+                    state = true,
+                    currentBalance = account.balance,
+                    history = account.history,
+                    currency = CURRENCY or "$",
+                })
+            end)
         else
-            ESX.ShowNotification(response.message)
+            SendNUIMessage({
+                type = "closeBank",
+                state = false,
+            })
         end
-        cb('ok')
-    end, amount)
-end
+    end,
+}
 
-function onWithdraw(data, cb)
-    local amount = data.amount
-    ESX.TriggerServerCallback('mta_bank:withdraw', function(response)
-        if response.success then
-            updateBalance(response.newBalance)
-        else
-            ESX.ShowNotification(response.message)
-        end
-        cb('ok')
-    end, amount)
-end
+RegisterNetEvent("bank:updateHistory", function()
+    Bank:syncAccount()
+end)
 
-function onCloseBank(_, cb)
-    SendNUIMessage({ type = "closeBank" })
-    SetNuiFocus(false, false)
-    cb('ok')
-end
-
--- Utility Functions
-function openBank(coords)
-    TriggerServerEvent('mta_bank:getBalance')
-end
-
-function updateBalance(newBalance)
-    SendNUIMessage({
-        type = "updateBalance",
-        balance = newBalance,
-    })
-end
-
-function setupPed(bank)
-    RequestModel(GetHashKey(bank.ped.model))
-    while not HasModelLoaded(GetHashKey(bank.ped.model)) do
-        Wait(1)
-    end
-
-    for _, coords in pairs(bank.coords) do
-        local ped = CreatePed(4, GetHashKey(bank.ped.model), coords.x, coords.y, coords.z, coords.w, false, true)
-        SetEntityAsMissionEntity(ped, true, true)
-        SetBlockingOfNonTemporaryEvents(ped, true)
-        SetEntityInvincible(ped, true)
-        FreezeEntityPosition(ped, true)
-        bank.ped.ped = ped
-    end
-end
-
-function drawText3D(coords, text)
+local function DrawText3D(coords, text)
     SetDrawOrigin(coords.x, coords.y, coords.z, 0)
+
     SetTextScale(0.0, 0.4)
     SetTextFont(4)
     SetTextCentre(true)
     SetTextOutline()
+
     BeginTextCommandDisplayText("STRING")
     AddTextComponentString(text)
     EndTextCommandDisplayText(0, 0)
+
     ClearDrawOrigin()
 end
 
-function createBlips(bank)
-    for _, coords in pairs(bank.coords) do
-        local blip = AddBlipForCoord(coords.x, coords.y, coords.z)
-        SetBlipSprite(blip, 108)
-        SetBlipScale(blip, 0.8)
-        SetBlipColour(blip, 2)
-        SetBlipAsShortRange(blip, true)
-        BeginTextCommandSetBlipName("STRING")
-        AddTextComponentString("Bank")
-        EndTextCommandSetBlipName(blip)
-    end
-end
+RegisterNUICallback("close", function(_, cb)
+    Bank:showBankUi(false)
+    cb("ok")
+end)
+
+RegisterNUICallback("deposit", function(data, cb)
+    Bank:deposit(data.amount)
+    cb("ok")
+end)
+
+RegisterNUICallback("withdraw", function(data, cb)
+    Bank:withdraw(data.amount)
+    cb("ok")
+end)
+
+RegisterNUICallback("transfer", function(data, cb)
+    Bank:transfer(data.amount, data.target)
+    cb("ok")
+end)
+
+RegisterNUICallback("notify", function(data, cb)
+    Bank.notify(data.message, data.type)
+    cb("ok")
+end)
 
 CreateThread(function()
-    for _, bank in pairs(banks) do
-        setupPed(bank)
-    end
+    for _, bank in pairs(BANKS) do
+        local model = joaat(bank.ped.model)
 
+        RequestModel(model)
+
+        while not HasModelLoaded(model) do
+            Wait(0)
+        end
+
+        for _, location in pairs(bank.locations) do
+            local coords = location.coords
+
+            local blip = AddBlipForCoord(coords.x, coords.y, coords.z)
+
+            SetBlipSprite(blip, 161)
+            SetBlipDisplay(blip, 4)
+            SetBlipScale(blip, 0.8)
+            SetBlipColour(blip, 2)
+            SetBlipAsShortRange(blip, true)
+
+            BeginTextCommandSetBlipName("STRING")
+            AddTextComponentString("Bank")
+            EndTextCommandSetBlipName(blip)
+
+            local ped = CreatePed(
+                4,
+                model,
+                coords.x,
+                coords.y,
+                coords.z - 1.0,
+                location.heading,
+                false,
+                true
+            )
+
+            FreezeEntityPosition(ped, true)
+            SetEntityInvincible(ped, true)
+            SetBlockingOfNonTemporaryEvents(ped, true)
+
+            TaskStartScenarioInPlace(
+                ped,
+                "WORLD_HUMAN_CLIPBOARD",
+                0,
+                true
+            )
+        end
+
+        SetModelAsNoLongerNeeded(model)
+    end
+end)
+
+CreateThread(function()
     while true do
-        Wait(0)
-        local playerCoords = GetEntityCoords(PlayerPedId())
-        for _, bank in pairs(banks) do
-            for _, coords in pairs(bank.coords) do
-                local distance = #(playerCoords - vector3(coords.x, coords.y, coords.z))
+        local sleep = 1000
+
+        local playerPed = PlayerPedId()
+        local playerCoords = GetEntityCoords(playerPed)
+
+        for _, bank in pairs(BANKS) do
+            for _, location in pairs(bank.locations) do
+                local distance = #(playerCoords - location.coords)
+
                 if distance < 2.0 then
-                    drawText3D(vector3(coords.x, coords.y, coords.z + 2.0), bank.ped.text)
-                    if IsControlJustPressed(0, 38) then
-                        openBank(coords)
+                    sleep = 0
+
+                    DrawText3D(
+                        location.coords + vec3(0.0, 0.0, 1.0),
+                        bank.ped.text
+                    )
+
+                    if not USE_TARGET and IsControlJustReleased(0, 38) then
+                        Bank:showBankUi(true)
                     end
                 end
             end
         end
+
+        Wait(sleep)
     end
 end)
 
-CreateThread(function()
-    for _, bank in pairs(banks) do
-        createBlips(bank)
+if USE_TARGET then
+    local registered = {}
+    for _, bank in ipairs(BANKS) do
+        local model = joaat(bank.ped.model)
+        if not registered[model] then
+            registered[model] = true
+            exports.ox_target:addModel(model, {
+                label = "Bank megnyitása",
+                icon = "fa-solid fa-bank",
+                onSelect = function()
+                    Bank:showBankUi(true)
+                end,
+            })
+        end
     end
-end)
-
-RegisterNetEvent('mta_bank:sendBalance', onBalanceReceived)
-RegisterNUICallback('deposit', onDeposit)
-RegisterNUICallback('withdraw', onWithdraw)
-RegisterNUICallback('closeBank', onCloseBank)
+end
